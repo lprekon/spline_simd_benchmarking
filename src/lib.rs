@@ -26,6 +26,7 @@ pub fn b_spline(x: f64, control_points: &[f64], knots: &[f64], degree: usize) ->
     return result;
 }
 
+/// Calculate the value of the B-spline at the given parameter `x` by looping over the basis functions
 pub fn b_spline_loop_over_basis(
     x: f64,
     control_points: &[f64],
