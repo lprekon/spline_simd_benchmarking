@@ -19,6 +19,7 @@ const INPUT_SIZE: usize = 100;
 fn bench_recursive_method(b: &mut Bencher) {
     let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
     b.iter(|| {
+        // measure how long it takes to evaluate the B-spline for each input value
         for x in input_values.iter() {
             let _ = b_spline(*x, &CONTROL_POINTS, &KNOTS, DEGREE);
         }
@@ -29,9 +30,6 @@ fn bench_recursive_method(b: &mut Bencher) {
 fn bench_simple_loop_method(b: &mut Bencher) {
     let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
     b.iter(|| {
-        // measure how long it takes to evaluate the B-spline for each input value
-        for x in input_values.iter() {
-            let _ = b_spline_loop_over_basis(*x, &CONTROL_POINTS, &KNOTS, DEGREE);
-        }
+            let _ = b_spline_loop_over_basis(&input_values, &CONTROL_POINTS, &KNOTS, DEGREE);
     });
 }

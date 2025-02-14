@@ -28,37 +28,42 @@ pub fn b_spline(x: f64, control_points: &[f64], knots: &[f64], degree: usize) ->
 
 /// Calculate the value of the B-spline at the given parameter `x` by looping over the basis functions
 pub fn b_spline_loop_over_basis(
-    x: f64,
+    inputs: &[f64],
     control_points: &[f64],
     knots: &[f64],
     degree: usize,
-) -> f64 {
+) -> Vec<f64> {
+    let mut outputs = Vec::with_capacity(inputs.len());
     let mut basis_activations = vec![0.0; knots.len() - 1];
     // fill the basis activations vec with the valued of the degree-0 basis functions
-    for i in 0..knots.len() - 1 {
-        if knots[i] <= x && x < knots[i + 1] {
-            basis_activations[i] = 1.0;
-        } else {
-            basis_activations[i] = 0.0;
+    for x in inputs{
+        let x = *x; 
+        for i in 0..knots.len() - 1 {
+            if knots[i] <= x && x < knots[i + 1] {
+                basis_activations[i] = 1.0;
+            } else {
+                basis_activations[i] = 0.0;
+            }
         }
-    }
 
-    for k in 1..=degree {
-        for i in 0..knots.len() - k - 1 {
-            let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
-            let left_recursion = basis_activations[i];
+        for k in 1..=degree {
+            for i in 0..knots.len() - k - 1 {
+                let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
+                let left_recursion = basis_activations[i];
 
-            let right_coefficient = (knots[i + k + 1] - x) / (knots[i + k + 1] - knots[i + 1]);
-            let right_recursion = basis_activations[i + 1];
+                let right_coefficient = (knots[i + k + 1] - x) / (knots[i + k + 1] - knots[i + 1]);
+                let right_recursion = basis_activations[i + 1];
 
-            basis_activations[i] =
-                left_coefficient * left_recursion + right_coefficient * right_recursion;
+                basis_activations[i] =
+                    left_coefficient * left_recursion + right_coefficient * right_recursion;
+            }
         }
-    }
 
-    let mut result = 0.0;
-    for i in 0..control_points.len() {
-        result += control_points[i] * basis_activations[i];
+        let mut result = 0.0;
+        for i in 0..control_points.len() {
+            result += control_points[i] * basis_activations[i];
+        }
+        outputs.push(result);
     }
-    return result;
+    return outputs;
 }
