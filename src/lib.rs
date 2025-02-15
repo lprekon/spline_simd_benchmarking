@@ -70,7 +70,7 @@ pub fn b_spline_loop_over_basis(
     return outputs;
 }
 
-const SIMD_WIDTH: usize = 4;
+const SIMD_WIDTH: usize = 8;
 
 pub fn b_spline_portable_simd(
     inputs: &[f64],
@@ -83,7 +83,7 @@ pub fn b_spline_portable_simd(
     let mut basis_activations = vec![0.0; knots.len() - 1];
 
     for x in inputs {
-        let x_splat: Simd<f64, SIMD_WIDTH> = f64x4::splat(*x);
+        let x_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(*x);
         // fill the basis activations vec with the value of the degree-0 basis functions
         let mut i = 0;
         while i + SIMD_WIDTH < knots.len() - 1 {
@@ -170,4 +170,149 @@ pub fn b_spline_portable_simd(
     }
 
     return outputs;
+}
+
+pub fn b_spline_portable_simd_transpose(
+    inputs: &[f64],
+    control_points: &[f64],
+    knots: &[f64],
+    degree: usize,
+) -> Vec<f64> {
+    use std::simd::prelude::*;
+    let mut outputs = Vec::with_capacity(inputs.len());
+    let mut basis_activations = vec![vec![0.0; inputs.len()]; knots.len() - 1];
+    // start with k=0
+    for i in 0..knots.len() - 1 {
+        let knot_i_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i]);
+        let knot_i_plus_1_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i + 1]);
+
+        let mut x_idx = 0;
+        // SIMD step
+        while x_idx + SIMD_WIDTH < inputs.len() {
+            let x_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&inputs[x_idx..]);
+
+            let left_mask: Mask<i64, SIMD_WIDTH> = knot_i_splat.simd_le(x_vec); // create a bitvector representing whether knots[i] <= x
+            let right_mask: Mask<i64, SIMD_WIDTH> = x_vec.simd_lt(knot_i_plus_1_splat); // create a bitvector representing whether x < knots[i + 1]
+            let full_mask: Mask<i64, SIMD_WIDTH> = left_mask & right_mask; // combine the two masks
+            let activation_vec: Simd<f64, SIMD_WIDTH> =
+                full_mask.select(Simd::splat(1.0), Simd::splat(0.0)); // create a vector with 1 in each position j where knots[i + j] <= x < knots[i + j + 1] and zeros elsewhere
+            activation_vec.copy_to_slice(&mut basis_activations[i][x_idx..]); // write the activations back to our basis_activations vector
+
+            x_idx += SIMD_WIDTH;
+        }
+        // scalar step
+        while x_idx < inputs.len() {
+            if knots[i] <= inputs[x_idx] && inputs[x_idx] < knots[i + 1] {
+                basis_activations[i][x_idx] = 1.0;
+            } else {
+                basis_activations[i][x_idx] = 0.0;
+            }
+            x_idx += 1;
+        }
+    }
+    // now to compute the higher degree basis functions
+    for k in 1..=degree {
+        for i in 0..knots.len() - k - 1 {
+            let knot_i_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i]);
+            let knot_i_plus_k_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i + k]);
+            let knot_i_plus_1_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i + 1]);
+            let knots_i_plus_k_plus_1_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i + k + 1]);
+
+            let mut x_idx = 0;
+            // SIMD step
+            while x_idx + SIMD_WIDTH < inputs.len() {
+                let x_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&inputs[x_idx..]);
+
+                // grab the value for and calculate the coefficient for the left term of the recursion, doing a SIMD_WIDTH chunk at a time
+                let left_coefficient_vec =
+                    (x_vec - knot_i_splat) / (knot_i_plus_k_splat - knot_i_splat);
+                let left_recursion_vec: Simd<f64, SIMD_WIDTH> =
+                    Simd::from_slice(&basis_activations[i][x_idx..]);
+
+                // grab the value for and calculate the coefficient for the right term of the recursion, doing a SIMD_WIDTH chunk at a time
+                let right_coefficient = (knot_i_plus_k_splat - x_vec)
+                    / (knots_i_plus_k_plus_1_splat - knot_i_plus_1_splat);
+                let right_recursion_vec: Simd<f64, SIMD_WIDTH> =
+                    Simd::from_slice(&basis_activations[i + 1][x_idx..]);
+
+                let new_basis_activations_vec = left_coefficient_vec * left_recursion_vec
+                    + right_coefficient * right_recursion_vec;
+                new_basis_activations_vec.copy_to_slice(&mut basis_activations[i][x_idx..]);
+
+                x_idx += SIMD_WIDTH;
+            }
+            // again, since knots.len() - k - 1 is not guaranteed to be a multiple of SIMD_WIDTH, we need to handle the remaining elements one by one
+            while x_idx < inputs.len() {
+                let left_coefficient = (inputs[x_idx] - knots[i]) / (knots[i + k] - knots[i]);
+                let left_recursion = basis_activations[i][x_idx];
+                let right_coefficient =
+                    (knots[i + k + 1] - inputs[x_idx]) / (knots[i + k + 1] - knots[i + 1]);
+                let right_recursion = basis_activations[i + 1][x_idx];
+                basis_activations[i][x_idx] =
+                    left_coefficient * left_recursion + right_coefficient * right_recursion;
+                x_idx += 1;
+            }
+        }
+    }
+
+    // now to comput the final results, which we can't do in SIMD becuase of how the matrix is laid out
+    for x_idx in 0..inputs.len() {
+        let mut result = 0.0;
+        for i in 0..control_points.len() {
+            result += control_points[i] * basis_activations[i][x_idx];
+        }
+        outputs.push(result);
+    }
+
+    return outputs;
+}
+
+mod tests {
+
+    #![allow(unused_imports)]
+    use super::*;
+    #[test]
+    fn test_recursive() {
+        // primarily for exercising SIMD code
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
+        let control_points = vec![1.0; 8];
+        let t = 8.95;
+        let expected_result = 0.8571;
+        let result = b_spline(t, &control_points, &knots, 3);
+        let rounded_result = (result * 10000.0).round() / 10000.0;
+        assert_eq!(rounded_result, expected_result, "actual != expected");
+    }
+
+    #[test]
+    fn test_simple_loop() {
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
+        let control_points = vec![1.0; 8];
+        let t = vec![8.95];
+        let expected_result = 0.8571;
+        let result = b_spline_loop_over_basis(&t, &control_points, &knots, 3);
+        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
+        assert_eq!(rounded_result, expected_result, "actual != expected");
+    }
+
+    #[test]
+    fn test_portable() {
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
+        let control_points = vec![1.0; 8];
+        let t = vec![8.95];
+        let expected_result = 0.8571;
+        let result = b_spline_portable_simd(&t, &control_points, &knots, 3);
+        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
+        assert_eq!(rounded_result, expected_result, "actual != expected");
+    }
+
+    #[test]
+    fn test_portable_transpose() {
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
+        let control_points = vec![1.0; 8];
+        let t = vec![8.95];
+        let expected_result = 0.8571;
+        let result = b_spline_portable_simd_transpose(&t, &control_points, &knots, 3);
+        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
+        assert_eq!(rounded_result, expected_result, "actual != expected");
+    }
 }

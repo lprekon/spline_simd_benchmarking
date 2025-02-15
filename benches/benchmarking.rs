@@ -2,7 +2,9 @@
 extern crate test;
 use test::Bencher;
 
-use rust_simd_becnhmarking::{b_spline, b_spline_loop_over_basis, b_spline_portable_simd};
+use rust_simd_becnhmarking::{
+    b_spline, b_spline_loop_over_basis, b_spline_portable_simd, b_spline_portable_simd_transpose,
+};
 
 // define the parameters for the B-spline we'll use in each benchmark
 const DEGREE: usize = 4;
@@ -39,5 +41,13 @@ fn bench_portable_simd_method(b: &mut Bencher) {
     let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
     b.iter(|| {
         let _ = b_spline_portable_simd(&input_values, &CONTROL_POINTS, &KNOTS, DEGREE);
+    });
+}
+
+#[bench]
+fn bench_portable_simd_transposed_method(b: &mut Bencher) {
+    let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
+    b.iter(|| {
+        let _ = b_spline_portable_simd_transpose(&input_values, &CONTROL_POINTS, &KNOTS, DEGREE);
     });
 }
