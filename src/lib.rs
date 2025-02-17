@@ -1,5 +1,7 @@
 #![feature(portable_simd)]
 
+use std::vec;
+
 /// recursivly compute the b-spline basis function for the given index `i`, degree `k`, and knot vector, at the given parameter `x`
 pub fn basis_activation(i: usize, k: usize, x: f64, knots: &[f64]) -> f64 {
     if k == 0 {
@@ -172,6 +174,8 @@ pub fn b_spline_portable_simd(
     return outputs;
 }
 
+const FINAL_GATHER_IDX_ADJUSTMENT: [usize; SIMD_WIDTH] = [0, 1, 2, 3, 4, 5, 6, 7];
+
 pub fn b_spline_portable_simd_transpose(
     inputs: &[f64],
     control_points: &[f64],
@@ -180,7 +184,8 @@ pub fn b_spline_portable_simd_transpose(
 ) -> Vec<f64> {
     use std::simd::prelude::*;
     let mut outputs = Vec::with_capacity(inputs.len());
-    let mut basis_activations = vec![vec![0.0; inputs.len()]; knots.len() - 1];
+    // the first `num_inputs` entries are the 0th basis functions for each input. the next `num_inputs` entries are the 1st basis functions for each input, and so on
+    let mut basis_activations = vec![0.0; (knots.len() - 1) * inputs.len()];
     // start with k=0
     for i in 0..knots.len() - 1 {
         let knot_i_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(knots[i]);
@@ -196,16 +201,19 @@ pub fn b_spline_portable_simd_transpose(
             let full_mask: Mask<i64, SIMD_WIDTH> = left_mask & right_mask; // combine the two masks
             let activation_vec: Simd<f64, SIMD_WIDTH> =
                 full_mask.select(Simd::splat(1.0), Simd::splat(0.0)); // create a vector with 1 in each position j where knots[i + j] <= x < knots[i + j + 1] and zeros elsewhere
-            activation_vec.copy_to_slice(&mut basis_activations[i][x_idx..]); // write the activations back to our basis_activations vector
+
+            let basis_index = i * inputs.len() + x_idx;
+            activation_vec.copy_to_slice(&mut basis_activations[basis_index..]); // write the activations back to our basis_activations vector
 
             x_idx += SIMD_WIDTH;
         }
         // scalar step
         while x_idx < inputs.len() {
+            let basis_index = i * inputs.len() + x_idx;
             if knots[i] <= inputs[x_idx] && inputs[x_idx] < knots[i + 1] {
-                basis_activations[i][x_idx] = 1.0;
+                basis_activations[basis_index] = 1.0;
             } else {
-                basis_activations[i][x_idx] = 0.0;
+                basis_activations[basis_index] = 0.0;
             }
             x_idx += 1;
         }
@@ -221,45 +229,64 @@ pub fn b_spline_portable_simd_transpose(
             let mut x_idx = 0;
             // SIMD step
             while x_idx + SIMD_WIDTH < inputs.len() {
+                let basis_index = i * inputs.len() + x_idx;
                 let x_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&inputs[x_idx..]);
 
                 // grab the value for and calculate the coefficient for the left term of the recursion, doing a SIMD_WIDTH chunk at a time
                 let left_coefficient_vec =
                     (x_vec - knot_i_splat) / (knot_i_plus_k_splat - knot_i_splat);
                 let left_recursion_vec: Simd<f64, SIMD_WIDTH> =
-                    Simd::from_slice(&basis_activations[i][x_idx..]);
+                    Simd::from_slice(&basis_activations[basis_index..]);
 
                 // grab the value for and calculate the coefficient for the right term of the recursion, doing a SIMD_WIDTH chunk at a time
                 let right_coefficient = (knot_i_plus_k_splat - x_vec)
                     / (knots_i_plus_k_plus_1_splat - knot_i_plus_1_splat);
                 let right_recursion_vec: Simd<f64, SIMD_WIDTH> =
-                    Simd::from_slice(&basis_activations[i + 1][x_idx..]);
+                    Simd::from_slice(&basis_activations[basis_index + inputs.len()..]);
 
                 let new_basis_activations_vec = left_coefficient_vec * left_recursion_vec
                     + right_coefficient * right_recursion_vec;
-                new_basis_activations_vec.copy_to_slice(&mut basis_activations[i][x_idx..]);
+
+                new_basis_activations_vec.copy_to_slice(&mut basis_activations[basis_index..]);
 
                 x_idx += SIMD_WIDTH;
             }
             // again, since knots.len() - k - 1 is not guaranteed to be a multiple of SIMD_WIDTH, we need to handle the remaining elements one by one
             while x_idx < inputs.len() {
+                let basis_index = i * inputs.len() + x_idx;
                 let left_coefficient = (inputs[x_idx] - knots[i]) / (knots[i + k] - knots[i]);
-                let left_recursion = basis_activations[i][x_idx];
+                let left_recursion = basis_activations[basis_index];
                 let right_coefficient =
                     (knots[i + k + 1] - inputs[x_idx]) / (knots[i + k + 1] - knots[i + 1]);
-                let right_recursion = basis_activations[i + 1][x_idx];
-                basis_activations[i][x_idx] =
+                let right_recursion = basis_activations[basis_index + inputs.len()];
+                basis_activations[basis_index] =
                     left_coefficient * left_recursion + right_coefficient * right_recursion;
                 x_idx += 1;
             }
         }
     }
 
-    // now to comput the final results, which we can't do in SIMD becuase of how the matrix is laid out
+    // now to comput the final results
+    let input_num_splat = Simd::splat(inputs.len());
     for x_idx in 0..inputs.len() {
+        let x_idx_splat = Simd::splat(x_idx);
         let mut result = 0.0;
-        for i in 0..control_points.len() {
-            result += control_points[i] * basis_activations[i][x_idx];
+        let mut i = 0;
+        while i + SIMD_WIDTH < control_points.len() {
+            let control_points_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&control_points[i..]);
+            let gather_indexes = (Simd::splat(i) + Simd::from_array(FINAL_GATHER_IDX_ADJUSTMENT))
+                * input_num_splat
+                + x_idx_splat; // (i.. i+SIMD_WIDTH).map(|j| j * inputs.len() + x_idx)
+            let basis_activations_vec: Simd<f64, SIMD_WIDTH> =
+                Simd::gather_or_default(&basis_activations, gather_indexes);
+            result += (control_points_vec * basis_activations_vec).reduce_sum();
+            i += SIMD_WIDTH;
+        }
+        // handle the remaining elements one by one
+        while i < control_points.len() {
+            let basis_index = i * inputs.len() + x_idx;
+            result += control_points[i] * basis_activations[basis_index];
+            i += 1;
         }
         outputs.push(result);
     }
