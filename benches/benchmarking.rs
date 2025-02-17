@@ -2,52 +2,57 @@
 extern crate test;
 use test::Bencher;
 
+#[allow(unused_imports)]
 use rust_simd_becnhmarking::{
     b_spline, b_spline_loop_over_basis, b_spline_portable_simd, b_spline_portable_simd_transpose,
 };
 
 // define the parameters for the B-spline we'll use in each benchmark
-const DEGREE: usize = 4;
-const CONTROL_POINTS: [f64; 16] = [1.0; 16];
-const KNOTS: [f64; 21] = [
-    0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-    17.0, 18.0, 19.0, 20.0,
-];
-
-const INPUT_SIZE: usize = 100;
+fn get_test_parameters() -> (usize, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let spline_size = 100;
+    let input_size = 100;
+    let degree = 4;
+    let control_points = vec![1.0; spline_size];
+    let knots = (0..spline_size + degree + 1)
+        .map(|x| x as f64 / (spline_size + degree + 1) as f64)
+        .collect::<Vec<_>>();
+    let inputs = (0..input_size)
+        .map(|x| x as f64 / input_size as f64)
+        .collect::<Vec<_>>();
+    (degree, control_points, knots, inputs)
+}
 
 #[bench]
-/// benchmark evaluating a degree-3 B-spline with 20 knots and 16 basis functions, over 100 different input values
+// benchmark evaluating a degree-3 B-spline with 20 knots and 16 basis functions, over 100 different input values
 fn bench_recursive_method(b: &mut Bencher) {
-    let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
+    let (degree, control_points, knots, inputs) = get_test_parameters();
     b.iter(|| {
-        // measure how long it takes to evaluate the B-spline for each input value
-        for x in input_values.iter() {
-            let _ = b_spline(*x, &CONTROL_POINTS, &KNOTS, DEGREE);
+        for x in inputs.iter() {
+            let _ = b_spline(*x, &control_points, &knots, degree);
         }
     });
 }
 
 #[bench]
 fn bench_simple_loop_method(b: &mut Bencher) {
-    let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
+    let (degree, control_points, knots, inputs) = get_test_parameters();
     b.iter(|| {
-        let _ = b_spline_loop_over_basis(&input_values, &CONTROL_POINTS, &KNOTS, DEGREE);
+        let _ = b_spline_loop_over_basis(&inputs, &control_points, &knots, degree);
     });
 }
 
 #[bench]
 fn bench_portable_simd_method(b: &mut Bencher) {
-    let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
+    let (degree, control_points, knots, inputs) = get_test_parameters();
     b.iter(|| {
-        let _ = b_spline_portable_simd(&input_values, &CONTROL_POINTS, &KNOTS, DEGREE);
+        let _ = b_spline_portable_simd(&inputs, &control_points, &knots, degree);
     });
 }
 
 #[bench]
 fn bench_portable_simd_transposed_method(b: &mut Bencher) {
-    let input_values: Vec<f64> = (0..INPUT_SIZE).map(|x| x as f64 / 10.0).collect(); // 100 input values, ranging from 0.0 to 9.9
+    let (degree, control_points, knots, inputs) = get_test_parameters();
     b.iter(|| {
-        let _ = b_spline_portable_simd_transpose(&input_values, &CONTROL_POINTS, &KNOTS, DEGREE);
+        let _ = b_spline_portable_simd_transpose(&inputs, &control_points, &knots, degree);
     });
 }
