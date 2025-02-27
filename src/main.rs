@@ -1,6 +1,6 @@
 pub fn main() {
-    let spline_size = 3000;
-    let input_size = 3000;
+    let spline_size = 2000;
+    let input_size = 2000;
     let degree = 4;
     let control_points = vec![1.0; spline_size];
     let knots = (0..spline_size + degree + 1)
