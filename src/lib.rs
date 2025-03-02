@@ -296,8 +296,8 @@ pub fn b_spline_portable_simd_transpose(
 
 #[cfg(all(
     target_arch = "x86_64",
-    // target_feature = "sse2",
-    // target_feature = "avx512f",
+    target_feature = "sse2",
+    target_feature = "avx512f",
 ))]
 pub fn b_spline_x86_intrinsics(
     inputs: &[f64],
@@ -309,22 +309,23 @@ pub fn b_spline_x86_intrinsics(
     let mut outputs = Vec::with_capacity(inputs.len());
     let mut basis_activations = vec![0.0; knots.len() - 1];
     for x in inputs {
+        println!("x = {}", x);
         let x_splat = unsafe { _mm512_set1_pd(*x) };
 
         let mut i = 0;
         // SIMD step for the degree-0 basis functions
         while i + SIMD_WIDTH < knots.len() - 1 {
+            println!("i = {}", i);
             unsafe {
-                let knots_i_vec = _mm512_load_pd(&knots[i]);
-                let knots_i_plus_1_vec = _mm512_load_pd(&knots[i + 1]);
-
+                let knots_i_vec = _mm512_loadu_pd(&knots[i]);
+                let knots_i_plus_1_vec = _mm512_loadu_pd(&knots[i + 1]);
                 let left_mask = _mm512_cmp_pd_mask(knots_i_vec, x_splat, _CMP_LE_OQ);
                 let right_mask = _mm512_cmp_pd_mask(x_splat, knots_i_plus_1_vec, _CMP_LT_OQ);
                 let full_mask = left_mask & right_mask;
                 let activation_vec =
-                    _mm512_mask_blend_pd(full_mask, _mm512_set1_pd(1.0), _mm512_set1_pd(0.0));
+                    _mm512_mask_blend_pd(full_mask, _mm512_set1_pd(0.0), _mm512_set1_pd(1.0));
 
-                _mm512_store_pd(&mut basis_activations[i], activation_vec);
+                _mm512_storeu_pd(&mut basis_activations[i], activation_vec);
             }
             i += SIMD_WIDTH;
         }
@@ -337,16 +338,15 @@ pub fn b_spline_x86_intrinsics(
             }
             i += 1;
         }
-
         for k in 1..=degree {
             let mut i = 0;
             // SIMD step for the higher degree basis functions
             while i + SIMD_WIDTH < knots.len() - k - 1 {
                 unsafe {
-                    let knots_i_vec = _mm512_load_pd(&knots[i]);
-                    let knots_i_plus_1_vec = _mm512_load_pd(&knots[i + 1]);
-                    let knots_i_plus_k_vec = _mm512_load_pd(&knots[i + k]);
-                    let knots_i_plus_k_plus_1_vec = _mm512_load_pd(&knots[i + k + 1]);
+                    let knots_i_vec = _mm512_loadu_pd(&knots[i]);
+                    let knots_i_plus_1_vec = _mm512_loadu_pd(&knots[i + 1]);
+                    let knots_i_plus_k_vec = _mm512_loadu_pd(&knots[i + k]);
+                    let knots_i_plus_k_plus_1_vec = _mm512_loadu_pd(&knots[i + k + 1]);
 
                     let left_cofficient_numerator_vec = _mm512_sub_pd(x_splat, knots_i_vec);
                     let left_cofficient_denominator_vec =
@@ -355,7 +355,7 @@ pub fn b_spline_x86_intrinsics(
                         left_cofficient_numerator_vec,
                         left_cofficient_denominator_vec,
                     );
-                    let left_recursion_vec = _mm512_load_pd(&basis_activations[i]);
+                    let left_recursion_vec = _mm512_loadu_pd(&basis_activations[i]);
 
                     let right_cofficient_numerator_vec =
                         _mm512_sub_pd(knots_i_plus_k_plus_1_vec, x_splat);
@@ -365,13 +365,13 @@ pub fn b_spline_x86_intrinsics(
                         right_cofficient_numerator_vec,
                         right_cofficient_denominator_vec,
                     );
-                    let right_recursion_vec = _mm512_load_pd(&basis_activations[i + 1]);
+                    let right_recursion_vec = _mm512_loadu_pd(&basis_activations[i + 1]);
 
                     let left_val_vec = _mm512_mul_pd(left_cofficient_vec, left_recursion_vec);
                     let right_val_vec = _mm512_mul_pd(right_cofficient_vec, right_recursion_vec);
 
                     let new_basis_activations_vec = _mm512_add_pd(left_val_vec, right_val_vec);
-                    _mm512_store_pd(&mut basis_activations[i], new_basis_activations_vec);
+                    _mm512_storeu_pd(&mut basis_activations[i], new_basis_activations_vec);
                 }
                 i += SIMD_WIDTH;
             }
@@ -394,8 +394,8 @@ pub fn b_spline_x86_intrinsics(
         let mut result = 0.0;
         while i + SIMD_WIDTH < control_points.len() {
             unsafe {
-                let control_points_vec = _mm512_load_pd(&control_points[i]);
-                let basis_activations_vec = _mm512_load_pd(&basis_activations[i]);
+                let control_points_vec = _mm512_loadu_pd(&control_points[i]);
+                let basis_activations_vec = _mm512_loadu_pd(&basis_activations[i]);
                 let result_vec = _mm512_mul_pd(control_points_vec, basis_activations_vec);
                 result += _mm512_reduce_add_pd(result_vec);
             }
@@ -456,6 +456,22 @@ mod tests {
         let t = vec![8.95];
         let expected_result = 0.8571;
         let result = b_spline_portable_simd_transpose(&t, &control_points, &knots, 3);
+        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
+        assert_eq!(rounded_result, expected_result, "actual != expected");
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "sse2",
+        target_feature = "avx512f",
+    ))]
+    #[test]
+    fn test_intrinsic() {
+        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
+        let control_points = vec![1.0; 8];
+        let t = vec![8.95];
+        let expected_result = 0.8571;
+        let result = b_spline_x86_intrinsics(&t, &control_points, &knots, 3);
         let rounded_result = (result[0] * 10000.0).round() / 10000.0;
         assert_eq!(rounded_result, expected_result, "actual != expected");
     }
