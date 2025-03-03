@@ -297,11 +297,7 @@ pub fn b_spline_portable_simd_transpose(
     return outputs;
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "sse2",
-    target_feature = "avx512f",
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f",))]
 pub fn b_spline_x86_intrinsics(
     inputs: &[f64],
     control_points: &[f64],

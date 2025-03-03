@@ -55,11 +55,7 @@ fn bench_portable_simd_method(b: &mut Bencher) {
 //     });
 // }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "sse2",
-    target_feature = "avx512f",
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f",))]
 #[bench]
 fn bench_intrinsic_simd_method(b: &mut Bencher) {
     let (degree, control_points, knots, inputs) = get_test_parameters();
