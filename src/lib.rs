@@ -72,7 +72,7 @@ pub fn b_spline_loop_over_basis(
     return outputs;
 }
 
-const SIMD_WIDTH: usize = 8;
+const SIMD_WIDTH: usize = 8; // We're using 512-bit registers, which can gold 8 64-bit floats
 
 pub fn b_spline_portable_simd(
     inputs: &[f64],
@@ -82,13 +82,16 @@ pub fn b_spline_portable_simd(
 ) -> Vec<f64> {
     use std::simd::prelude::*;
     let mut outputs = Vec::with_capacity(inputs.len());
-    let mut basis_activations = vec![0.0; knots.len() - 1];
+    let num_k0_activations = knots.len() - 1;
+    let mut basis_activations = vec![0.0; num_k0_activations];
 
     for x in inputs {
         let x_splat: Simd<f64, SIMD_WIDTH> = Simd::splat(*x);
         // fill the basis activations vec with the value of the degree-0 basis functions
         let mut i = 0;
-        while i + SIMD_WIDTH < knots.len() - 1 {
+        // make sure we have enough elements to do a SIMD_WIDTH chunk
+        // if we have e.g 8 k=0 activations, then starting with i=0 we'll pull write to basis_activations[0..7]
+        while i + SIMD_WIDTH <= num_k0_activations {
             let knots_i_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&knots[i..]);
             let knots_i_plus_1_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&knots[i + 1..]);
 
@@ -102,7 +105,7 @@ pub fn b_spline_portable_simd(
             i += SIMD_WIDTH; // increment i by SIMD_WIDTH, to advance to the next chunk
         }
         // since knots.len() - 1 is not guaranteed to be a multiple of SIMD_WIDTH, we need to handle the remaining elements one by one
-        while i < knots.len() - 1 {
+        while i < num_k0_activations {
             if knots[i] <= *x && *x < knots[i + 1] {
                 basis_activations[i] = 1.0;
             } else {
@@ -114,7 +117,7 @@ pub fn b_spline_portable_simd(
         // now to compute the higher degree basis functions
         for k in 1..=degree {
             let mut i = 0;
-            while i + SIMD_WIDTH < knots.len() - k - 1 {
+            while i + SIMD_WIDTH <= num_k0_activations - k {
                 let knots_i_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&knots[i..]);
                 let knots_i_plus_k_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&knots[i + k..]);
                 let knots_i_plus_1_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&knots[i + 1..]);
@@ -140,7 +143,7 @@ pub fn b_spline_portable_simd(
                 i += SIMD_WIDTH;
             }
             // again, since knots.len() - k - 1 is not guaranteed to be a multiple of SIMD_WIDTH, we need to handle the remaining elements one by one
-            while i < knots.len() - k - 1 {
+            while i < num_k0_activations - k {
                 let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
                 let left_recursion = basis_activations[i];
 
@@ -156,7 +159,7 @@ pub fn b_spline_portable_simd(
         // now to compute the final result, in chunks of SIMD_WIDTH
         let mut i = 0;
         let mut result = 0.0;
-        while i + SIMD_WIDTH < control_points.len() {
+        while i + SIMD_WIDTH <= control_points.len() {
             let control_points_vec: Simd<f64, SIMD_WIDTH> = Simd::from_slice(&control_points[i..]);
             let basis_activations_vec: Simd<f64, SIMD_WIDTH> =
                 Simd::from_slice(&basis_activations[i..]);
@@ -307,15 +310,14 @@ pub fn b_spline_x86_intrinsics(
 ) -> Vec<f64> {
     use std::arch::x86_64::*;
     let mut outputs = Vec::with_capacity(inputs.len());
-    let mut basis_activations = vec![0.0; knots.len() - 1];
+    let num_k0_activations = knots.len() - 1;
+    let mut basis_activations = vec![0.0; num_k0_activations];
     for x in inputs {
-        println!("x = {}", x);
         let x_splat = unsafe { _mm512_set1_pd(*x) };
 
         let mut i = 0;
         // SIMD step for the degree-0 basis functions
-        while i + SIMD_WIDTH < knots.len() - 1 {
-            println!("i = {}", i);
+        while i + SIMD_WIDTH <= num_k0_activations {
             unsafe {
                 let knots_i_vec = _mm512_loadu_pd(&knots[i]);
                 let knots_i_plus_1_vec = _mm512_loadu_pd(&knots[i + 1]);
@@ -330,7 +332,7 @@ pub fn b_spline_x86_intrinsics(
             i += SIMD_WIDTH;
         }
         // scalar step for the degree-0 basis functions
-        while i < knots.len() - 1 {
+        while i < num_k0_activations {
             if knots[i] <= *x && *x < knots[i + 1] {
                 basis_activations[i] = 1.0;
             } else {
@@ -341,7 +343,7 @@ pub fn b_spline_x86_intrinsics(
         for k in 1..=degree {
             let mut i = 0;
             // SIMD step for the higher degree basis functions
-            while i + SIMD_WIDTH < knots.len() - k - 1 {
+            while i + SIMD_WIDTH <= num_k0_activations - k {
                 unsafe {
                     let knots_i_vec = _mm512_loadu_pd(&knots[i]);
                     let knots_i_plus_1_vec = _mm512_loadu_pd(&knots[i + 1]);
@@ -376,7 +378,7 @@ pub fn b_spline_x86_intrinsics(
                 i += SIMD_WIDTH;
             }
             // scalar step for the higher degree basis functions
-            while i < knots.len() - k - 1 {
+            while i < num_k0_activations - k {
                 let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
                 let left_recursion = basis_activations[i];
 
@@ -392,7 +394,7 @@ pub fn b_spline_x86_intrinsics(
         // SIMD step for the final result
         let mut i = 0;
         let mut result = 0.0;
-        while i + SIMD_WIDTH < control_points.len() {
+        while i + SIMD_WIDTH <= control_points.len() {
             unsafe {
                 let control_points_vec = _mm512_loadu_pd(&control_points[i]);
                 let basis_activations_vec = _mm512_loadu_pd(&basis_activations[i]);
@@ -417,47 +419,82 @@ mod tests {
     use super::*;
     #[test]
     fn test_recursive() {
-        // primarily for exercising SIMD code
-        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
-        let control_points = vec![1.0; 8];
-        let t = 8.95;
-        let expected_result = 0.8571;
-        let result = b_spline(t, &control_points, &knots, 3);
-        let rounded_result = (result * 10000.0).round() / 10000.0;
-        assert_eq!(rounded_result, expected_result, "actual != expected");
+        let knots = vec![
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let control_points = vec![1.0; 9];
+        let t_vals = [1.25, 6.2, 10.05];
+        let expected_results = [0.31771, 1.0, 0.80712];
+        for run in 0..t_vals.len() {
+            let t = t_vals[run];
+            let expected_result = expected_results[run];
+            let result = b_spline(t, &control_points, &knots, 3);
+            let rounded_result = (result * 100000.0).round() / 100000.0;
+            assert_eq!(
+                rounded_result, expected_result,
+                "run {run}: actual != expected"
+            );
+        }
     }
 
     #[test]
     fn test_simple_loop() {
-        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
-        let control_points = vec![1.0; 8];
-        let t = vec![8.95];
-        let expected_result = 0.8571;
-        let result = b_spline_loop_over_basis(&t, &control_points, &knots, 3);
-        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
-        assert_eq!(rounded_result, expected_result, "actual != expected");
+        let knots = vec![
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let control_points = vec![1.0; 9];
+        let t_vals = [1.25, 6.2, 10.05];
+        let expected_results = [0.31771, 1.0, 0.80712];
+        let results = b_spline_loop_over_basis(&t_vals, &control_points, &knots, 3);
+        let rounded_result: Vec<f64> = results
+            .iter()
+            .map(|x| (x * 100000.0).round() / 100000.0)
+            .collect();
+        assert_eq!(
+            rounded_result,
+            expected_results.to_vec(),
+            "actual != expected"
+        );
     }
 
     #[test]
     fn test_portable() {
-        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
-        let control_points = vec![1.0; 8];
-        let t = vec![8.95];
-        let expected_result = 0.8571;
-        let result = b_spline_portable_simd(&t, &control_points, &knots, 3);
-        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
-        assert_eq!(rounded_result, expected_result, "actual != expected");
+        let knots = vec![
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let control_points = vec![1.0; 9];
+        let t_vals = [1.25, 6.2, 10.05];
+        let expected_results = [0.31771, 1.0, 0.80712];
+        let results = b_spline_portable_simd(&t_vals, &control_points, &knots, 3);
+        let rounded_result: Vec<f64> = results
+            .iter()
+            .map(|x| (x * 100000.0).round() / 100000.0)
+            .collect();
+        assert_eq!(
+            rounded_result,
+            expected_results.to_vec(),
+            "actual != expected"
+        );
     }
 
     #[test]
     fn test_portable_transpose() {
-        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
-        let control_points = vec![1.0; 8];
-        let t = vec![8.95];
-        let expected_result = 0.8571;
-        let result = b_spline_portable_simd_transpose(&t, &control_points, &knots, 3);
-        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
-        assert_eq!(rounded_result, expected_result, "actual != expected");
+        let knots = vec![
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let control_points = vec![1.0; 9];
+        let t_vals = [1.25, 6.2, 10.05];
+        let expected_results = [0.31771, 1.0, 0.80712];
+        let results = b_spline_portable_simd_transpose(&t_vals, &control_points, &knots, 3);
+        let rounded_result: Vec<f64> = results
+            .iter()
+            .map(|x| (x * 100000.0).round() / 100000.0)
+            .collect();
+        assert_eq!(
+            rounded_result,
+            expected_results.to_vec(),
+            "actual != expected"
+        );
     }
 
     #[cfg(all(
@@ -467,12 +504,21 @@ mod tests {
     ))]
     #[test]
     fn test_intrinsic() {
-        let knots = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
-        let control_points = vec![1.0; 8];
-        let t = vec![8.95];
-        let expected_result = 0.8571;
-        let result = b_spline_x86_intrinsics(&t, &control_points, &knots, 3);
-        let rounded_result = (result[0] * 10000.0).round() / 10000.0;
-        assert_eq!(rounded_result, expected_result, "actual != expected");
+        let knots = vec![
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let control_points = vec![1.0; 9];
+        let t_vals = [1.25, 6.2, 10.05];
+        let expected_results = [0.31771, 1.0, 0.80712];
+        let results = b_spline_x86_intrinsics(&t_vals, &control_points, &knots, 3);
+        let rounded_result: Vec<f64> = results
+            .iter()
+            .map(|x| (x * 100000.0).round() / 100000.0)
+            .collect();
+        assert_eq!(
+            rounded_result,
+            expected_results.to_vec(),
+            "actual != expected"
+        );
     }
 }
