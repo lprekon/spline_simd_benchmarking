@@ -3,7 +3,7 @@ extern crate test;
 use test::Bencher;
 
 #[allow(unused_imports)]
-use rust_simd_becnhmarking::*;
+use rust_simd_benchmarking::*;
 
 // define the parameters for the B-spline we'll use in each benchmark
 fn get_test_parameters() -> (usize, Vec<f64>, Vec<f64>, Vec<f64>) {

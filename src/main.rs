@@ -10,5 +10,5 @@ pub fn main() {
         .map(|x| x as f64 / input_size as f64)
         .collect::<Vec<_>>();
     let _ =
-        rust_simd_becnhmarking::b_spline_portable_simd(&inputs, &control_points, &knots, degree);
+        rust_simd_benchmarking::b_spline_portable_simd(&inputs, &control_points, &knots, degree);
 }
