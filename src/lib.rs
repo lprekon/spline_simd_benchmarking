@@ -358,27 +358,27 @@ pub fn b_spline_x86_intrinsics(
                     let knots_i_plus_k_vec = _mm512_loadu_pd(&knots[i + k]);
                     let knots_i_plus_k_plus_1_vec = _mm512_loadu_pd(&knots[i + k + 1]);
 
-                    let left_cofficient_numerator_vec = _mm512_sub_pd(x_splat, knots_i_vec);
-                    let left_cofficient_denominator_vec =
+                    let left_coefficient_numerator_vec = _mm512_sub_pd(x_splat, knots_i_vec);
+                    let left_coefficient_denominator_vec =
                         _mm512_sub_pd(knots_i_plus_k_vec, knots_i_vec);
-                    let left_cofficient_vec = _mm512_div_pd(
-                        left_cofficient_numerator_vec,
-                        left_cofficient_denominator_vec,
+                    let left_coefficient_vec = _mm512_div_pd(
+                        left_coefficient_numerator_vec,
+                        left_coefficient_denominator_vec,
                     );
                     let left_recursion_vec = _mm512_loadu_pd(&basis_activations[i]);
 
-                    let right_cofficient_numerator_vec =
+                    let right_coefficient_numerator_vec =
                         _mm512_sub_pd(knots_i_plus_k_plus_1_vec, x_splat);
-                    let right_cofficient_denominator_vec =
+                    let right_coefficient_denominator_vec =
                         _mm512_sub_pd(knots_i_plus_k_plus_1_vec, knots_i_plus_1_vec);
-                    let right_cofficient_vec = _mm512_div_pd(
-                        right_cofficient_numerator_vec,
-                        right_cofficient_denominator_vec,
+                    let right_coefficient_vec = _mm512_div_pd(
+                        right_coefficient_numerator_vec,
+                        right_coefficient_denominator_vec,
                     );
                     let right_recursion_vec = _mm512_loadu_pd(&basis_activations[i + 1]);
 
-                    let left_val_vec = _mm512_mul_pd(left_cofficient_vec, left_recursion_vec);
-                    let right_val_vec = _mm512_mul_pd(right_cofficient_vec, right_recursion_vec);
+                    let left_val_vec = _mm512_mul_pd(left_coefficient_vec, left_recursion_vec);
+                    let right_val_vec = _mm512_mul_pd(right_coefficient_vec, right_recursion_vec);
 
                     let new_basis_activations_vec = _mm512_add_pd(left_val_vec, right_val_vec);
                     _mm512_storeu_pd(&mut basis_activations[i], new_basis_activations_vec);
