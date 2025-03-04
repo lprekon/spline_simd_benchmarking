@@ -4,6 +4,7 @@ use std::vec;
 
 /// recursivly compute the b-spline basis function for the given index `i`, degree `k`, and knot vector, at the given parameter `x`
 pub fn basis_activation(i: usize, k: usize, x: f64, knots: &[f64]) -> f64 {
+    // If degree is 0, the basis function is 1 if the parameter is within the range of the knot, and 0 otherwise
     if k == 0 {
         if knots[i] <= x && x < knots[i + 1] {
             return 1.0;
@@ -11,12 +12,16 @@ pub fn basis_activation(i: usize, k: usize, x: f64, knots: &[f64]) -> f64 {
             return 0.0;
         }
     }
-    let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
-    let left_recursion = basis_activation(i, k - 1, x, knots);
 
-    let right_coefficient = (knots[i + k + 1] - x) / (knots[i + k + 1] - knots[i + 1]);
+    // Otherwise, we compute compute basis functions one degree lower, and use them to compute the current basis function
+    let left_recursion = basis_activation(i, k - 1, x, knots);
     let right_recursion = basis_activation(i + 1, k - 1, x, knots);
 
+    // Compute the weights for the left and right "child" basis functions
+    let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
+    let right_coefficient = (knots[i + k + 1] - x) / (knots[i + k + 1] - knots[i + 1]);
+
+    // Combine the left and right basis functions with the computed weights to produce the value of the current basis function
     let result = left_coefficient * left_recursion + right_coefficient * right_recursion;
     return result;
 }
@@ -25,6 +30,7 @@ pub fn basis_activation(i: usize, k: usize, x: f64, knots: &[f64]) -> f64 {
 pub fn b_spline(x: f64, control_points: &[f64], knots: &[f64], degree: usize) -> f64 {
     let mut result = 0.0;
     for i in 0..control_points.len() {
+        // compute the value of each top-level basis function, multiplying it by the corresponding control point, and sum the results
         result += control_points[i] * basis_activation(i, degree, x, knots);
     }
     return result;
@@ -37,11 +43,14 @@ pub fn b_spline_loop_over_basis(
     knots: &[f64],
     degree: usize,
 ) -> Vec<f64> {
+    // setup our data structures to hold the intermediate and final results
     let mut outputs = Vec::with_capacity(inputs.len());
     let mut basis_activations = vec![0.0; knots.len() - 1];
+
     for x in inputs {
         let x = *x;
-        // fill the basis activations vec with the value of the degree-0 basis functions
+
+        // For the current value of `x`, fill the basis activations vec with the value of the degree-0 basis functions
         for i in 0..knots.len() - 1 {
             if knots[i] <= x && x < knots[i + 1] {
                 basis_activations[i] = 1.0;
@@ -49,7 +58,9 @@ pub fn b_spline_loop_over_basis(
                 basis_activations[i] = 0.0;
             }
         }
-
+        /* For each degree k, compute the higher degree basis functions, 
+         using the value of the "child" basis functions that were stored in the previous iteration,
+         overwriting the child values once they're no longer needed */
         for k in 1..=degree {
             for i in 0..knots.len() - k - 1 {
                 let left_coefficient = (x - knots[i]) / (knots[i + k] - knots[i]);
@@ -63,6 +74,7 @@ pub fn b_spline_loop_over_basis(
             }
         }
 
+        // Finally, compute the ultimate value of this B-Spline at `x` by multiplying each basis function by the corresponding control point, and summing the results
         let mut result = 0.0;
         for i in 0..control_points.len() {
             result += control_points[i] * basis_activations[i];
@@ -72,7 +84,7 @@ pub fn b_spline_loop_over_basis(
     return outputs;
 }
 
-const SIMD_WIDTH: usize = 8; // We're using 512-bit registers, which can gold 8 64-bit floats
+const SIMD_WIDTH: usize = 8; // We use this value to denote how many elements we intend to process in a single SIMD operation
 
 pub fn b_spline_portable_simd(
     inputs: &[f64],
